@@ -92,11 +92,11 @@ def write_manifest(run_dir: str | Path, manifest: dict[str, Any]) -> Path:
 
 
 def run_pipeline() -> dict[str, Any]:
-    if not os.environ.get("BOOM_PASSWORD"):
-        raise RuntimeError("BOOM_PASSWORD environment variable not set")
+    if not os.environ.get("BOOM_API_PASSWORD"):
+        raise RuntimeError("BOOM_API_PASSWORD environment variable not set")
 
-    if not os.environ.get("BOOM_USERNAME"):
-        raise RuntimeError("BOOM_USERNAME environment variable not set")
+    if not os.environ.get("BOOM_API_USER"):
+        raise RuntimeError("BOOM_API_USER environment variable not set")
 
     filter_file = resolve_existing_file(inputs.FILTER_FILE, "FILTER_FILE")
     validate_time_range(inputs.START_TIME, inputs.END_TIME)
@@ -113,10 +113,15 @@ def run_pipeline() -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Imported after validation so configuration errors stay clear and fast.
+    import boom
     import boom_filter_per_run
     import plot_lc
     import population_plots
     import run_summary
+
+    # One BOOM client for the whole run: it logs in on its first request,
+    # renews its token when it expires, and retries transient errors.
+    client = boom.BoomClient(timeout=boom_filter_per_run.BOOM_TIMEOUT_S)
 
     print("\n========== BOOM filter ==========")
     filter_result = boom_filter_per_run.main(
@@ -127,6 +132,7 @@ def run_pipeline() -> dict[str, Any]:
         exclude_start_time=inputs.EXCLUDE_START_TIME,
         exclude_end_time=inputs.EXCLUDE_END_TIME,
         compute_pass_rates=inputs.COMPUTE_FILTER_PASS_RATES,
+        client=client,
     )
 
     run_dir = Path(filter_result["run_dir"])
@@ -148,11 +154,12 @@ def run_pipeline() -> dict[str, Any]:
         exclude_start_time=inputs.EXCLUDE_START_TIME,
         exclude_end_time=inputs.EXCLUDE_END_TIME,
         band_rates_json=filter_result["band_rates_json"],
+        client=client,
     )
 
     print("\n========== Population plots ==========")
     population_plot_result = population_plots.main(
-        plot_result["delta_metrics_csv"],
+        plot_result["object_metrics_csv"],
         str(run_dir),
         output_subdir="pop_plots",
     )
@@ -163,12 +170,13 @@ def run_pipeline() -> dict[str, Any]:
         str(run_dir),
         n_candidates=filter_result["n_candidates"],
         n_objects=filter_result["n_objects"],
-        delta_metrics_csv=plot_result["delta_metrics_csv"],
+        object_metrics_csv=plot_result["object_metrics_csv"],
     )
 
     manifest = {
         "created_at_utc": iso_utc_now(),
         "status": "complete",
+        "boom_client_version": boom.get_version(),
         "command": {
             "filter_file": str(filter_file),
             "start_time": inputs.START_TIME,
@@ -196,7 +204,7 @@ def run_pipeline() -> dict[str, Any]:
             "candidates_summary_csv": filter_result["candidates_summary"],
             "objects_summary_csv": filter_result["objects_summary"],
             "plots_dir": plot_result["plots_dir"],
-            "delta_metrics_csv": plot_result["delta_metrics_csv"],
+            "object_metrics_csv": plot_result["object_metrics_csv"],
             "pop_plots_dir": population_plot_result["pop_plots_dir"],
             "delta_distribution_plot": population_plot_result["delta_distribution_plot"],
             "highlighted_fraction_by_band_plot": population_plot_result["highlighted_fraction_by_band_plot"],
@@ -229,7 +237,7 @@ def main() -> int:
     print(f"Band rates JSON:        {artifacts['band_rates_json']}")
     print(f"Object summary CSV:     {artifacts['objects_summary_csv']}")
     print(f"Plots directory:        {artifacts['plots_dir']}")
-    print(f"Delta metrics CSV:      {artifacts['delta_metrics_csv']}")
+    print(f"Object metrics CSV:      {artifacts['object_metrics_csv']}")
     print(f"Population plots dir:   {artifacts['pop_plots_dir']}")
     print(f"Time range distribution:{artifacts['delta_distribution_plot']}")
     print(f"Band fraction plot:     {artifacts['highlighted_fraction_by_band_plot']}")

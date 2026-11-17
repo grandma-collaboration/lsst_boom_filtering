@@ -31,11 +31,17 @@ conda activate boom-queries
 pip install -r requirements.txt
 ```
 
-Set your BOOM credentials before running any script that queries BOOM:
+This installs [boom-client](https://github.com/boom-astro/boom-client) (pinned to
+0.3.0), the Python client the scripts use to query BOOM. It needs Python 3.11 or
+later.
+
+Set your BOOM credentials before running any script that queries BOOM. These are
+the names boom-client reads; they replace `BOOM_USERNAME` and `BOOM_PASSWORD`,
+used by earlier versions of the scripts:
 
 ```bash
-export BOOM_USERNAME="your_boom_username_here"
-export BOOM_PASSWORD="your_boom_password_here"
+export BOOM_API_USER="your_boom_username_here"
+export BOOM_API_PASSWORD="your_boom_password_here"
 ```
 
 You can also copy `.env.example` as a local template, but the scripts do not
@@ -80,13 +86,13 @@ The optional parameters can be left at their typical value.
 | `START_TIME` | yes | none | UTC ISO start time for the BOOM filter query, for example `"2026-03-01T12:00:00"`. |
 | `END_TIME` | yes | none | UTC ISO end time for the BOOM filter query. It must be later than `START_TIME`. |
 | `OUTPUT_DIR` | no | `"boom_filter_outputs"` | Base output directory. A timestamped run directory is created inside it. |
-| `PLOTS_SUBDIR` | no | `"plots"` | Subdirectory inside the run directory where per-object plots and `delta_metrics.csv` are written. It must stay inside the run directory; absolute paths and `..` are rejected. |
+| `PLOTS_SUBDIR` | no | `"plots"` | Subdirectory inside the run directory where the per-object light-curve plots are written. It must stay inside the run directory; absolute paths and `..` are rejected. |
 | `EXCLUDE_START_TIME` | no | `None` | UTC ISO start time of an interval to exclude from the run (see [Time Range Exclusion](#time-range-exclusion)). Must be set together with `EXCLUDE_END_TIME`. |
 | `EXCLUDE_END_TIME` | no | `None` | UTC ISO end time of the excluded interval. Must be set together with `EXCLUDE_START_TIME`. |
 | `MAX_OBJECTS` | no | `None` | Limit the number of objects processed by the plotting and metric step. Useful for smoke tests. If set, it must be a positive integer. |
 | `INCLUDE_ZTF` | no | `True` | Include ZTF cone-search crossmatch photometry in individual light-curve plots, when available. |
 | `INCLUDE_FORCED_PHOTOMETRY` | no | `True` | Include LSST forced photometry in individual light-curve plots. |
-| `SKIP_INDIVIDUAL_PLOTS` | no | `False` | Skip per-object light-curve PNG and pickle files. The pipeline still writes LSST-only `delta_metrics.csv`, population plots, query summary, and manifest. |
+| `SKIP_INDIVIDUAL_PLOTS` | no | `False` | Skip per-object light-curve PNG and pickle files. The pipeline still writes LSST-only `object_metrics.csv`, population plots, query summary, and manifest. |
 | `COMPUTE_FILTER_PASS_RATES` | no | `False` | Also count every LSST alert and object in the queried range, to report the fraction passing the filter (see [Filter Pass Rates](#filter-pass-rates)). Adds about 2 minutes. |
 
 ### Time Range Exclusion
@@ -164,10 +170,12 @@ configs/schecks.json
 ```
 
 The .json file (`FILTER_FILE`) is passed to BOOM as the `pipeline` field of the filter request. The
-pipeline runner queries BOOM in one-day batches and uses a request limit of
-`10000` alerts per batch (`FILTER_QUERY_LIMIT` in
-`scripts/boom_filter_per_run.py`). If a batch returns `10000` alerts, the script
-prints a warning because the result may have been truncated by that limit.
+pipeline runner runs it with boom-client's `iter_filter`, one day at a time, and
+a day is split in half when BOOM reports that its results are too large for one
+response. Only the `_id` and `objectId` of each filter-passing alert are needed
+(the full alerts are queried separately, for `cands.json`), so a final
+`{"$project": {"objectId": 1}}` stage is appended to the filter, which keeps the
+responses small.
 
 ## Outputs
 
@@ -181,10 +189,10 @@ boom_filter_outputs/
     cands_sum.csv
     objs_sum.csv
     band_rates.json
+    object_metrics.csv
     plots/
       lc_<n>_object_<objectId>.png
       lc_<n>_object_<objectId>.pickle
-      delta_metrics.csv
     pop_plots/
       delta_distribution.png
       delta_distribution.pickle
@@ -211,7 +219,7 @@ Important files:
 - `band_rates.json`: BOOM's rising and fading rates for each object and band, as
   of the object's most recent LSST detection in that band. They are shown in the
   legend of individual light-curve plots.
-- `plots/delta_metrics.csv`: per-object metric table used to build the
+- `object_metrics.csv`: per-object metric table used to build the
   population plots.
 - `pop_plots/`: run-level diagnostic plots.
 - `query_summary.md`: markdown summary of retrieved candidates/objects and the
@@ -245,30 +253,30 @@ and CSV summaries.
 
 ### `scripts/plot_lc.py`
 
-Plots light curves and writes `delta_metrics.csv` from existing `objs.json` and
+Plots light curves and writes `object_metrics.csv` from existing `objs.json` and
 `cands.json` files.
 
 | Argument | Required | Default | Description |
 | --- | --- | --- | --- |
 | `--objects_json` | yes | none | Path to an objects JSON file, normally `objs.json`. |
 | `--alerts_json` | yes | none | Path to a candidate/alert JSON file, normally `cands.json`. |
-| `--output_dir` | no | `./lc_plots/` | Directory where the plot subdirectory is created. |
+| `--output_dir` | no | `./lc_plots/` | Directory where `object_metrics.csv` is written and the plot subdirectory is created. |
 | `--include_ztf` | no | `False` | Include ZTF cone-search crossmatch photometry when available. |
 | `--no_fp` | no | `False` | Disable LSST forced photometry. By default forced photometry is included. |
 | `--output_subdir` | no | `None` | Optional plot subfolder name. If omitted, it is derived from the objects JSON filename. |
 | `--max_objects` | no | `None` | Optional maximum number of objects to process. |
-| `--skip_individual_plots` | no | `False` | Only write LSST-only delta metrics; do not write individual light-curve plots. |
+| `--skip_individual_plots` | no | `False` | Only write LSST-only object metrics; do not write individual light-curve plots. |
 | `--exclude_start_time` | no | `None` | Optional UTC ISO start time of the run's excluded interval, only used to shade it on plots. Objects with points in it are dropped by `boom_filter_per_run.py`, not here. |
 | `--exclude_end_time` | no | `None` | Optional UTC ISO end time of the excluded interval. |
 | `--band_rates_json` | no | `None` | Optional path to `band_rates.json`, to show each band's rising/fading rate in the plot legends. |
 
 ### `scripts/population_plots.py`
 
-Creates population-level plots from an existing `delta_metrics.csv`.
+Creates population-level plots from an existing `object_metrics.csv`.
 
 | Argument | Required | Default | Description |
 | --- | --- | --- | --- |
-| `--delta_metrics_csv` | yes | none | Path to `delta_metrics.csv` from `plot_lc.py` or the full pipeline. |
+| `--object_metrics_csv` | yes | none | Path to `object_metrics.csv` from `plot_lc.py` or the full pipeline. |
 | `--output_dir` | yes | none | Run directory where the population plot subdirectory is created. |
 | `--output_subdir` | no | `pop_plots` | Population plot subfolder name. |
 
@@ -283,7 +291,7 @@ Writes a markdown summary for one run.
 | `--n_candidates` | yes | none | Total number of candidates retrieved. |
 | `--n_objects` | yes | none | Total number of objects retrieved. |
 | `--output_filename` | no | `query_summary.md` | Name of the summary markdown file. |
-| `--delta_metrics_csv` | no | `None` | Optional path to `plots/delta_metrics.csv`; enables the first-relative-time-range-bin section. |
+| `--object_metrics_csv` | no | `None` | Optional path to `object_metrics.csv`; enables the first-relative-time-range-bin section. |
 
 ## Notes
 
