@@ -1,4 +1,6 @@
 astropy
+astroquery
 boom-client==0.3.0
 matplotlib
 numpy
+requests

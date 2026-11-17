@@ -140,13 +140,13 @@ BOOM_URL = "https://api.kaboom.caltech.edu"
 
 # AUTH
 def get_token():
-    username = os.environ.get("BOOM_USERNAME")
+    username = os.environ.get("BOOM_API_USER")
     if not username:
-        raise RuntimeError("BOOM_USERNAME environment variable not set")
+        raise RuntimeError("BOOM_API_USER environment variable not set")
 
-    password = os.environ.get("BOOM_PASSWORD")
+    password = os.environ.get("BOOM_API_PASSWORD")
     if not password:
-        raise RuntimeError("BOOM_PASSWORD environment variable not set")
+        raise RuntimeError("BOOM_API_PASSWORD environment variable not set")
 
     url = f"{BOOM_URL}/auth"
     response = requests.post(
