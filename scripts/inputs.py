@@ -20,14 +20,24 @@ from __future__ import annotations
 # Path to the JSON file containing the MongoDB aggregation pipeline that
 # defines the BOOM filter to test. Must be a JSON list. Relative paths are
 # resolved from the current working directory, not from this file.
-FILTER_FILE = "configs/schecks.json"
+FILTER_FILE = "configs/kncopy_nofitqual.json"
 
 # UTC ISO start time of the BOOM query, e.g. "2026-03-01T12:00:00".
-START_TIME = "2025-09-01T12:00:00"
+START_TIME = "2026-11-08T12:00:00"
+# START_TIME = "2026-07-03T12:00:00"
+# START_TIME = "2026-02-20T05:00:00"
+# START_TIME = "2026-10-30T01:30:00"
+#START_TIME = "2025-09-01T12:00:00"
+#START_TIME = "2025-10-20T12:00:00"
 # START_TIME = "2026-07-06T12:00:00"
 
 # UTC ISO end time of the BOOM query. Must be strictly later than START_TIME.
-END_TIME = "2026-07-15T12:00:00"
+END_TIME = "2026-11-09T12:00:00"
+#END_TIME = "2026-06-29T12:00:00"
+#END_TIME = "2026-07-15T12:00:00"
+# END_TIME = "2026-02-20T05:01:00"
+# END_TIME = "2026-10-30T01:45:00"
+# END_TIME = "2026-07-15T12:00:00"
 # END_TIME = "2026-07-11T12:00:00"
 
 # =========================================================================
@@ -41,8 +51,8 @@ END_TIME = "2026-07-15T12:00:00"
 # results.
 OUTPUT_DIR = "boom_filter_outputs"
 
-# Subdirectory inside the run folder where individual light-curve plots and
-# delta_metrics.csv are written. Must stay inside the run directory: absolute
+# Subdirectory inside the run folder where individual light-curve plots are
+# written. Must stay inside the run directory: absolute
 # paths and ".." are rejected.
 PLOTS_SUBDIR = "plots"
 
@@ -54,6 +64,7 @@ PLOTS_SUBDIR = "plots"
 # retrieved. Objects that don't touch this range at all are kept with their
 # full, untouched history. The excluded range is still shaded red on plots
 # for reference, even though no retrieved object ever has data in it.
+
 EXCLUDE_START_TIME = "2026-02-18T12:00:00"
 EXCLUDE_END_TIME = "2026-02-27T12:00:00"
 # EXCLUDE_START_TIME = None
@@ -74,10 +85,10 @@ INCLUDE_ZTF = True
 INCLUDE_FORCED_PHOTOMETRY = True
 
 # If True, skip writing individual light-curve PNG/pickle files entirely.
-# The pipeline still writes LSST-only delta_metrics.csv, population plots,
+# The pipeline still writes LSST-only object_metrics.csv, population plots,
 # the query summary, and the manifest. Useful for large runs where only the
 # population-level outputs are needed.
-SKIP_INDIVIDUAL_PLOTS = False
+SKIP_INDIVIDUAL_PLOTS = True
 
 # If True, also count every LSST alert and every LSST object in the queried
 # range, and report the fraction of them that pass the filter (printed after

@@ -1,15 +1,12 @@
 import json
 import os
 import argparse
-import requests
 import csv
 import pickle
-import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
 from astropy.time import Time
 
 
@@ -29,40 +26,11 @@ BANDS = ["u", "g", "r", "i", "z", "y"]
 # CONFIG
 # =========================
 
-BOOM_URL = "https://api.kaboom.caltech.edu"
 INCLUDE_ZTF = False
 INCLUDE_FP = True
 
-# =========================
-# AUTH
-# =========================
-def get_token():
-    username = os.environ.get("BOOM_USERNAME")
-    if not username:
-        raise RuntimeError("BOOM_USERNAME environment variable not set")
-
-    password = os.environ.get("BOOM_PASSWORD")
-    if not password:
-        raise RuntimeError("BOOM_PASSWORD environment variable not set")
-
-    url = f"{BOOM_URL}/auth"
-
-    response = requests.post(
-        url,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data={
-            "username": username,
-            "password": password,
-        },
-    )
-
-    response.raise_for_status()
-    data = response.json()
-
-    token = data["access_token"]
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=data.get("expires_in", 3600))
-
-    return token, expires_at
+# Seconds before a BOOM request times out (boom-client's default is 60 s)
+BOOM_TIMEOUT_S = 300
 
 # =========================
 # DATA LOADING
@@ -108,7 +76,7 @@ def in_excluded_interval(point, exclude_jd):
     return exclude_jd[0] <= point["jd"] < exclude_jd[1]
 
 
-def empty_delta_metric(obj_id, status):
+def empty_object_metric(obj_id, status):
     metric = {
         "objectId": obj_id,
         "delta": None,
@@ -128,7 +96,7 @@ def empty_delta_metric(obj_id, status):
     return metric
 
 
-def write_delta_metrics(metrics, output_csv):
+def write_object_metrics(metrics, output_csv):
     fieldnames = [
         "objectId",
         "delta",
@@ -163,25 +131,20 @@ def first_valid_coordinates(points):
     return None, None
 
 # =========================
-# ZTF CONE SEARCH
+# ZTF CROSS-MATCH
 # =========================
 
-def angular_sep(ra1, dec1, ra2, dec2):
-    # small-angle approximation
-    dra = (ra1 - ra2) * np.cos(np.radians(dec1))
-    ddec = dec1 - dec2
-    return np.sqrt(dra**2 + ddec**2)
-
-
-def match_ztf_object(token, ra, dec, radius_arcsec=1.0, limit=100):
-    url = f"{BOOM_URL}/queries/cone_search"
-
-    radius_deg = radius_arcsec / 3600.0
-
-    payload = {
-        "catalog_name": "ZTF_alerts_aux",
-        "projection": {
+def match_ztf_object(client, ra, dec, radius_arcsec=1.0, limit=100):
+    # The ZTF objects within radius_arcsec, nearest first, each with its
+    # distance_arcsec (computed from coordinates.radec_geojson)
+    data = client.near_search(
+        "ZTF_alerts_aux",
+        ra,
+        dec,
+        radius_arcsec=radius_arcsec,
+        projection={
                 "_id": 1,                       # ZTF ID of the object
+                "coordinates.radec_geojson": 1, # Position of the object, for the distance
 
                 "prv_candidates.jd": 1,         # Photometry for the 5-sigma detections
                 "prv_candidates.magpsf": 1,
@@ -196,63 +159,27 @@ def match_ztf_object(token, ra, dec, radius_arcsec=1.0, limit=100):
                 "prv_nondetections.band": 1,
 
         },
-        "object_coordinates": {
-            "additionalProperty": [ra, dec]
-        },
-        "radius": radius_deg,
-        "unit": "Degrees",
-        "limit": limit,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-    resp = requests.post(url, json=payload, headers=headers)
-
-    if resp.status_code != 200:
-        print(resp.status_code)
-        print(resp.text)
-        resp.raise_for_status()
-
-    data = resp.json()["data"]["additionalProperty"]
+        limit=limit,
+    )
 
     if len(data) == 0:
         print("No ZTF match found")
         return None, [], []
 
     # -----------------------------------
-    # Find closest object
+    # Find closest object with detections
     # -----------------------------------
     best_obj = None
-    best_dist = np.inf
 
     for obj in data:
-        # get radec from first candidate
-        candidates = obj.get("prv_candidates", [])
-        if len(candidates) == 0:
-            continue
+        print(f"Checking ZTF object {obj.get('_id')}: separation {obj.get('distance_arcsec', float('nan')):.2f} arcsec")
 
-        p0 = candidates[0]
-        ra_ztf = p0.get("ra")
-        dec_ztf = p0.get("dec")
-
-        if ra_ztf is None or dec_ztf is None:
-            continue
-
-        print(f"Checking ZTF object {obj.get('_id')}: RA={ra_ztf:.4f}, Dec={dec_ztf:.4f} ...")
-
-        d = angular_sep(ra, dec, ra_ztf, dec_ztf)
-
-        print(f"  Angular separation: {d*3600:.2f} arcsec")
-
-        if d < best_dist:
-            best_dist = d
+        if obj.get("prv_candidates"):
             best_obj = obj
+            break
 
     if best_obj is None:
-        print("No valid ZTF object with coordinates")
+        print("No ZTF object with detections")
         return None, [], []
 
     # -----------------------------------
@@ -271,7 +198,7 @@ def match_ztf_object(token, ra, dec, radius_arcsec=1.0, limit=100):
         if is_valid_ulim(p):
             limits.append(p)
 
-    print(f"Matched ZTF object: {best_obj.get('_id')} (dist ≈ {best_dist*3600:.2f} arcsec)")
+    print(f"Matched ZTF object: {best_obj.get('_id')} (dist ≈ {best_obj.get('distance_arcsec', float('nan')):.2f} arcsec)")
 
     return best_obj, detections, limits
 
@@ -333,7 +260,7 @@ def compute_object_metrics(obj, alert_points_passed):
 
     all_lsst_jds = [p["jd"] for points in points_by_band.values() for p in points]
     if not all_lsst_jds:
-        return empty_delta_metric(obj_id, "no_valid_lsst_photometry")
+        return empty_object_metric(obj_id, "no_valid_lsst_photometry")
 
     jd_min = min(all_lsst_jds)
     baseline = max(all_lsst_jds) - jd_min
@@ -404,7 +331,7 @@ def compute_object_metrics(obj, alert_points_passed):
 # =========================
 # LIGHT CURVE PLOTTING
 # =========================
-def plot_object_lc(token, obj, alert_points_passed, output_dir, iter, exclude_jd=None, band_rates=None):
+def plot_object_lc(client, obj, alert_points_passed, output_dir, iter, exclude_jd=None, band_rates=None):
     obj_id = obj.get("_id", obj.get("objectId"))
     metric = compute_object_metrics(obj, alert_points_passed)
     band_rates = band_rates or {}
@@ -426,11 +353,11 @@ def plot_object_lc(token, obj, alert_points_passed, output_dir, iter, exclude_jd
     lc_points_ztf = []
     ztf_ulims = []
     if INCLUDE_ZTF and obj_ra is not None and obj_dec is not None:
-        best_match, lc_points_ztf, ztf_ulims = match_ztf_object(token, ra=obj_ra, dec=obj_dec)
+        best_match, lc_points_ztf, ztf_ulims = match_ztf_object(client, ra=obj_ra, dec=obj_dec)
 
     if not lc_points and not lc_point_fp and not lc_points_ztf:
         print("No plottable photometry for this object")
-        return empty_delta_metric(obj_id, "no_photometry")
+        return empty_object_metric(obj_id, "no_photometry")
 
     # Organize points by band
     points_by_band = defaultdict(list)
@@ -458,7 +385,7 @@ def plot_object_lc(token, obj, alert_points_passed, output_dir, iter, exclude_jd
     )
     if not all_plot_jds:
         print("No valid photometry survived quality cuts for this object")
-        return empty_delta_metric(obj_id, "no_valid_photometry")
+        return empty_object_metric(obj_id, "no_valid_photometry")
 
     jd_min = min(all_plot_jds)
     jd_min_iso = Time(jd_min, format='jd', scale='utc').to_datetime()
@@ -670,6 +597,7 @@ def main(
     exclude_start_time=None,
     exclude_end_time=None,
     band_rates_json=None,
+    client=None,
 ):
     global INCLUDE_ZTF, INCLUDE_FP
 
@@ -679,9 +607,13 @@ def main(
         INCLUDE_FP = include_fp
 
     os.makedirs(output_dir, exist_ok=True)
-    token = None
-    if make_plots and INCLUDE_ZTF:
-        token, expires_at = get_token()
+    # A BOOM client is only needed for the ZTF cross-match. Run on its own,
+    # this script makes its own (credentials from BOOM_API_USER and
+    # BOOM_API_PASSWORD); boom_pipeline.py passes its own. boom is imported
+    # here so the scripts that import helpers from this file don't need it.
+    if make_plots and INCLUDE_ZTF and client is None:
+        from boom import BoomClient
+        client = BoomClient(timeout=BOOM_TIMEOUT_S)
 
     highlight_count = 0
     exclude_jd = make_exclude_jd(exclude_start_time, exclude_end_time)
@@ -691,8 +623,8 @@ def main(
         objs_file = os.path.basename(objects_json_file)
         stem = os.path.splitext(objs_file)[0]
         output_subdir = stem[5:] if stem.startswith("objs_") else stem
-    output_dir = os.path.join(output_dir, output_subdir)
-    os.makedirs(output_dir, exist_ok=True)
+    plots_dir = os.path.join(output_dir, output_subdir)
+    os.makedirs(plots_dir, exist_ok=True)
 
     # Load local data
     objects_data = load_json(objects_json_file)
@@ -711,27 +643,28 @@ def main(
     if max_objects is not None:
         objects_data = objects_data[:max_objects]
 
-    delta_metrics = []
+    object_metrics = []
     for i, obj in enumerate(objects_data):
         obj_id = obj.get("_id", obj.get("objectId"))
         if make_plots:
             metric = plot_object_lc(
-                token, obj, alert_points_passed, output_dir, i,
+                client, obj, alert_points_passed, plots_dir, i,
                 exclude_jd=exclude_jd, band_rates=rates_by_object.get(obj_id, {}),
             )
         else:
             metric = compute_object_metrics(obj, alert_points_passed)
-        delta_metrics.append(metric)
+        object_metrics.append(metric)
         highlight_count += metric["n_highlighted_points"]
 
-    delta_metrics_csv = os.path.join(output_dir, "delta_metrics.csv")
-    write_delta_metrics(delta_metrics, delta_metrics_csv)
-    print(f"Saved delta metrics to {delta_metrics_csv}")
+    # Next to the run's other JSON and CSV files, not in the plot folder
+    object_metrics_csv = os.path.join(output_dir, "object_metrics.csv")
+    write_object_metrics(object_metrics, object_metrics_csv)
+    print(f"Saved object metrics to {object_metrics_csv}")
 
     print(f"Total highlighted points: {highlight_count}")
     return {
-        "plots_dir": output_dir,
-        "delta_metrics_csv": delta_metrics_csv,
+        "plots_dir": plots_dir,
+        "object_metrics_csv": object_metrics_csv,
         "n_objects_plotted": len(objects_data) if make_plots else 0,
         "n_objects_with_metrics": len(objects_data),
         "n_highlighted_points": highlight_count,
@@ -752,12 +685,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot LSST light curves with highlights")
     parser.add_argument("--objects_json", required=True, help="Path to objects JSON file")
     parser.add_argument("--alerts_json", required=True, help="Path to alerts JSON file")
-    parser.add_argument("--output_dir", default="./lc_plots/", help="Directory to save plots")
+    parser.add_argument("--output_dir", default="./lc_plots/", help="Directory where object_metrics.csv and the plot subfolder are written")
     parser.add_argument("--include_ztf", action="store_true", help="Include ZTF crossmatch photometry when available")
     parser.add_argument("--no_fp", action="store_true", help="Do not include LSST forced photometry")
     parser.add_argument("--output_subdir", default=None, help="Optional plot subfolder name")
     parser.add_argument("--max_objects", type=int, default=None, help="Optional maximum number of objects to plot")
-    parser.add_argument("--skip_individual_plots", action="store_true", help="Only write LSST-only delta metrics; do not plot individual light curves")
+    parser.add_argument("--skip_individual_plots", action="store_true", help="Only write LSST-only object metrics; do not plot individual light curves")
     parser.add_argument("--exclude_start_time", default=None, help="Optional UTC ISO start of the run's excluded interval, shaded on plots for reference (objects with points in it are dropped by boom_filter_per_run.py, not here)")
     parser.add_argument("--exclude_end_time", default=None, help="Optional UTC ISO end of that interval")
     parser.add_argument("--band_rates_json", default=None, help="Optional path to band_rates.json from boom_filter_per_run.py, for the rising/fading rate legend entries")

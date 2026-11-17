@@ -1,10 +1,10 @@
-import requests
-from datetime import datetime, timedelta, timezone
 from astropy.time import Time
 import os
 import json
 import csv
 from collections import Counter
+
+from boom import BoomClient
 
 """
 Example usage:
@@ -24,41 +24,9 @@ This creates one run folder inside --output_dir. The run folder contains:
 # CONFIG
 # =========================
 
-BOOM_URL = "https://api.kaboom.caltech.edu"
-
-# Most filter-passing alerts BOOM returns for one 1-day filter query
-FILTER_QUERY_LIMIT = 10000
-
-# =========================
-# AUTH
-# =========================
-def get_token():
-    username = os.environ.get("BOOM_USERNAME")
-    if not username:
-        raise RuntimeError("BOOM_USERNAME environment variable not set")
-
-    password = os.environ.get("BOOM_PASSWORD")
-    if not password:
-        raise RuntimeError("BOOM_PASSWORD environment variable not set")
-
-    url = f"{BOOM_URL}/auth"
-
-    response = requests.post(
-        url,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data={
-            "username": username,
-            "password": password,
-        },
-    )
-
-    response.raise_for_status()
-    data = response.json()
-
-    token = data["access_token"]
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=data.get("expires_in", 3600))
-
-    return token, expires_at
+# Seconds before a BOOM request times out. boom-client's default (60 s) is too
+# short for the LSST_alerts_aux object count, which takes about a minute.
+BOOM_TIMEOUT_S = 300
 
 
 # =========================
@@ -80,126 +48,49 @@ def load_pipeline(filter_file):
 # =========================
 
 
-def run_filter(token, pipeline, start_time_iso, end_time_iso):
-    url = f"{BOOM_URL}/filters/test"
-
-    start_jd = Time(start_time_iso, scale='utc').jd
-    end_jd = Time(end_time_iso, scale='utc').jd
-
-    payload = {
-        "pipeline": pipeline,
-        # "object_ids": ["170635513149522077"],
-        "start_jd": start_jd,
-        "end_jd": end_jd,
-        "survey": "LSST",
-        "permissions": {"LSST": []},
-        "limit": FILTER_QUERY_LIMIT,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-    response = requests.post(url, json=payload, headers=headers)
-
-    if response.status_code != 200:
-        print(response.status_code)
-        print(response.text)
-        response.raise_for_status()
-
-    return response.json()
-
-
-
-def get_candidates(token, candid_list, batch_size=1000):
-    url = f"{BOOM_URL}/queries/find"
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
+def get_candidates(client, candid_list, batch_size=1000):
     all_results = []
 
     # Loop over batches
     for i in range(0, len(candid_list), batch_size):
         batch_ids = candid_list[i:i + batch_size]
 
-        payload = {
-            "catalog_name": "LSST_alerts",
-            "filter": {
-                "_id": {"$in": batch_ids}
-            },
-        }
-
         print(f"Querying candidate batch {i // batch_size + 1} ({len(batch_ids)} ids)")
 
-        response = requests.post(url, json=payload, headers=headers)
-
-        if response.status_code != 200:
-            print(response.status_code)
-            print(response.text)
-            response.raise_for_status()
-
-        data = response.json()
-
-        results = data["data"]
-        all_results.extend(results)
+        all_results.extend(client.find("LSST_alerts", {"_id": {"$in": batch_ids}}))
 
     return all_results
 
 
 
-def get_objects(token, objectid_list, batch_size=1000):
-    url = f"{BOOM_URL}/queries/find"
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
+def get_objects(client, objectid_list, batch_size=1000):
     all_results = []
 
     for i in range(0, len(objectid_list), batch_size):
         batch_ids = objectid_list[i:i + batch_size]
 
-        payload = {
-            "catalog_name": "LSST_alerts_aux",
-            "filter": { "_id": {"$in": batch_ids} },
-            "projection": {
-                "objectId": 1,                  # ID of the object
+        projection = {
+            "objectId": 1,                  # ID of the object
 
-                "prv_candidates.diaSourceId": 1,         # Photometry for the 5-sigma detections
-                "prv_candidates.jd": 1,
-                "prv_candidates.magpsf": 1,
-                "prv_candidates.sigmapsf": 1,
-                "prv_candidates.band": 1,
-                "prv_candidates.snr": 1,
-                "prv_candidates.ra": 1,
-                "prv_candidates.dec": 1,
+            "prv_candidates.diaSourceId": 1,         # Photometry for the 5-sigma detections
+            "prv_candidates.jd": 1,
+            "prv_candidates.magpsf": 1,
+            "prv_candidates.sigmapsf": 1,
+            "prv_candidates.band": 1,
+            "prv_candidates.snr": 1,
+            "prv_candidates.ra": 1,
+            "prv_candidates.dec": 1,
 
-                "fp_hists.band": 1,             # Forced photometry
-                "fp_hists.jd": 1,
-                "fp_hists.magpsf": 1,
-                "fp_hists.sigmapsf": 1,
-                "fp_hists.snr_psf": 1
-            }
+            "fp_hists.band": 1,             # Forced photometry
+            "fp_hists.jd": 1,
+            "fp_hists.magpsf": 1,
+            "fp_hists.sigmapsf": 1,
+            "fp_hists.snr_psf": 1
         }
 
         print(f"Querying object batch {i // batch_size + 1} ({len(batch_ids)} ids)")
 
-        response = requests.post(url, json=payload, headers=headers)
-
-        if response.status_code != 200:
-            print(response.status_code)
-            print(response.text)
-            response.raise_for_status()
-
-        data = response.json()
-
-        results = data["data"]
-        all_results.extend(results)
+        all_results.extend(client.find("LSST_alerts_aux", {"_id": {"$in": batch_ids}}, projection=projection))
 
     return all_results
 
@@ -232,7 +123,7 @@ def get_last_point_ids_by_band(object_jsons):
     return last_point_by_object_band
 
 
-def get_band_rates(token, object_jsons, batch_size=1000):
+def get_band_rates(client, object_jsons, batch_size=1000):
     """
     Fetch BOOM's rising/fading rate for the most recent LSST detection in
     each band of each object, regardless of whether that detection ever
@@ -254,36 +145,21 @@ def get_band_rates(token, object_jsons, batch_size=1000):
 
     dia_source_ids = list(dia_source_id_to_keys.keys())
 
-    url = f"{BOOM_URL}/queries/find"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
     rates_by_object = {}
     for i in range(0, len(dia_source_ids), batch_size):
         batch_ids = dia_source_ids[i:i + batch_size]
 
-        payload = {
-            "catalog_name": "LSST_alerts",
-            "filter": {"_id": {"$in": batch_ids}},
-            "projection": {
-                "objectId": 1,
-                "candidate.band": 1,
-                "properties.photstats": 1,
-            },
+        projection = {
+            "objectId": 1,
+            "candidate.band": 1,
+            "properties.photstats": 1,
         }
 
         print(f"Querying band-rate batch {i // batch_size + 1} ({len(batch_ids)} ids)")
 
-        response = requests.post(url, json=payload, headers=headers)
+        alerts = client.find("LSST_alerts", {"_id": {"$in": batch_ids}}, projection=projection)
 
-        if response.status_code != 200:
-            print(response.status_code)
-            print(response.text)
-            response.raise_for_status()
-
-        for alert in response.json()["data"]:
+        for alert in alerts:
             dia_source_id = alert.get("_id")
             photstats = (alert.get("properties") or {}).get("photstats") or {}
             for obj_id, band in dia_source_id_to_keys.get(dia_source_id, []):
@@ -301,30 +177,6 @@ def get_band_rates(token, object_jsons, batch_size=1000):
 # =========================
 # TOTAL COUNTS
 # =========================
-
-
-def count_documents(token, catalog_name, filter_dict):
-    """Number of documents in catalog_name matching filter_dict (BOOM /queries/count)."""
-    url = f"{BOOM_URL}/queries/count"
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "catalog_name": catalog_name,
-        "filter": filter_dict,
-    }
-
-    response = requests.post(url, json=payload, headers=headers)
-
-    if response.status_code != 200:
-        print(response.status_code)
-        print(response.text)
-        response.raise_for_status()
-
-    return response.json()["data"]
 
 
 def jd_range(start_time, end_time):
@@ -654,10 +506,12 @@ def write_object_summary(rows, fieldnames, output_csv):
 
 
 
-def main(output_dir, filter_file, start_time, end_time, exclude_start_time=None, exclude_end_time=None, compute_pass_rates=False):
+def main(output_dir, filter_file, start_time, end_time, exclude_start_time=None, exclude_end_time=None, compute_pass_rates=False, client=None):
 
-    print("Auth...")
-    token, _ = get_token()
+    # Run on its own, this script makes its own BOOM client (credentials from
+    # BOOM_API_USER and BOOM_API_PASSWORD); boom_pipeline.py passes its own.
+    if client is None:
+        client = BoomClient(timeout=BOOM_TIMEOUT_S)
 
     start_dt = Time(start_time, scale='utc').to_datetime()
     end_dt = Time(end_time, scale='utc').to_datetime()
@@ -676,32 +530,28 @@ def main(output_dir, filter_file, start_time, end_time, exclude_start_time=None,
     pipeline = load_pipeline(filter_file)
     print(f"Loaded pipeline with {len(pipeline)} stages")
 
-    print("Running LSST filter in 1-day batches...\n")
+    # Only the _id and objectId of each filter-passing alert are used below
+    # (get_candidates queries the full alerts), so the filter is asked for
+    # nothing else, which keeps BOOM's responses small.
+    id_pipeline = pipeline + [{"$project": {"objectId": 1}}]
+
+    print("Running LSST filter in 1-day windows...\n")
     if exclude_start_time and exclude_end_time:
         print(f"Excluding time range: {exclude_start_time} to {exclude_end_time}")
 
     for interval_start, interval_end in query_intervals:
         print(f"Included query interval: {interval_start.isoformat()} to {interval_end.isoformat()}")
-        current = interval_start
 
-        while current < interval_end:
-            next_day = min(current + timedelta(days=1), interval_end)
+        # iter_filter queries the interval one day at a time, splits a day whose
+        # results are too large for one response, and returns an alert sitting
+        # on the boundary between two days only once.
+        alerts = list(client.iter_filter(
+            "LSST", id_pipeline, interval_start.isoformat(), interval_end.isoformat(), window=1,
+        ))
 
-            start_iso = current.isoformat()
-            end_iso = next_day.isoformat()
+        print(f"  fetched {len(alerts)} alerts")
 
-            print(f"Querying: {start_iso} to {end_iso}")
-
-            result = run_filter(token, pipeline, start_iso, end_iso)
-            alerts = result.get("data", {}).get("results", [])
-
-            print(f"  fetched {len(alerts)} alerts")
-            if len(alerts) >= FILTER_QUERY_LIMIT:
-                print(f"  WARNING: fetched {FILTER_QUERY_LIMIT} alerts; the BOOM query limit may have truncated this batch.")
-
-            all_alerts.extend(alerts)
-
-            current = next_day
+        all_alerts.extend(alerts)
 
     print(f"\n                  Total alerts collected: {len(all_alerts)}")
 
@@ -711,8 +561,8 @@ def main(output_dir, filter_file, start_time, end_time, exclude_start_time=None,
     run_dir = make_run_dir(output_dir, start_time, end_time)
     print(f"Saving this run to: {run_dir}\n")
 
-    candidate_jsons = get_candidates(token, id_list)
-    object_jsons = get_objects(token, objectid_list)
+    candidate_jsons = get_candidates(client, id_list)
+    object_jsons = get_objects(client, objectid_list)
     print("")
 
     # An object with any point (any band, detection or forced photometry) in
@@ -749,9 +599,9 @@ def main(output_dir, filter_file, start_time, end_time, exclude_start_time=None,
             start_time, end_time, exclude_start_time, exclude_end_time
         )
         print("Counting every LSST alert in the queried range...")
-        n_alerts_total = count_documents(token, "LSST_alerts", alerts_total_filter)
+        n_alerts_total = client.count("LSST_alerts", alerts_total_filter)
         print("Counting every LSST object in the queried range...")
-        n_objects_total = count_documents(token, "LSST_alerts_aux", objects_total_filter)
+        n_objects_total = client.count("LSST_alerts_aux", objects_total_filter)
 
         filter_pass_rates = {
             "n_alerts_passing": n_alerts_passing,
@@ -774,7 +624,7 @@ def main(output_dir, filter_file, start_time, end_time, exclude_start_time=None,
     print("===================================================================\n")
 
     print("Querying the latest rising/fading rate per band for each object...")
-    band_rates = get_band_rates(token, object_jsons)
+    band_rates = get_band_rates(client, object_jsons)
 
     output_candidates_json = os.path.join(run_dir, "cands.json")
     output_objects_json = os.path.join(run_dir, "objs.json")

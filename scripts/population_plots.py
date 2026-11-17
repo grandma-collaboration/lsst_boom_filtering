@@ -31,8 +31,8 @@ def save_figure(fig, output_path):
     return pickle_path
 
 
-def load_delta_metrics(delta_metrics_csv):
-    with open(delta_metrics_csv, "r", newline="") as f:
+def load_object_metrics(object_metrics_csv):
+    with open(object_metrics_csv, "r", newline="") as f:
         return list(csv.DictReader(f))
 
 
@@ -42,10 +42,10 @@ def float_or_none(value):
     return float(value)
 
 
-def plot_delta_distribution(delta_metrics, output_dir):
+def plot_delta_distribution(object_metrics, output_dir):
 
     n_excluded_long_baseline = 0
-    for row in delta_metrics:
+    for row in object_metrics:
         baseline_days = float_or_none(row.get("baseline_days"))
         if baseline_days is not None and baseline_days > DELTA_MAX_BASELINE_DAYS:
             n_excluded_long_baseline += 1
@@ -53,7 +53,7 @@ def plot_delta_distribution(delta_metrics, output_dir):
     n_singlepoint = 0
     n_both = 0
 
-    for row in delta_metrics:
+    for row in object_metrics:
         if row.get("delta_status") == "single_point":
             n_singlepoint += 1
             if float_or_none(row.get("baseline_days")) > DELTA_MAX_BASELINE_DAYS:
@@ -62,7 +62,7 @@ def plot_delta_distribution(delta_metrics, output_dir):
 
     used_deltas = [
         float_or_none(row.get("delta"))
-        for row in delta_metrics
+        for row in object_metrics
         if row.get("delta_status") == "used"
         and float_or_none(row.get("baseline_days")) < DELTA_MAX_BASELINE_DAYS
     ]
@@ -70,7 +70,7 @@ def plot_delta_distribution(delta_metrics, output_dir):
     used_deltas = [value for value in used_deltas if value is not None]
 
     n_used = len(used_deltas)
-    denominator = len(delta_metrics)
+    denominator = len(object_metrics)
     used_fraction = n_used / denominator if denominator > 0 else 0
 
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -220,14 +220,14 @@ def plot_fraction_histogram(ax, values, title, n_total):
     annotate_used_objects(ax, len(values), n_total)
 
 
-def plot_highlighted_fraction_by_band(delta_metrics, output_dir):
+def plot_highlighted_fraction_by_band(object_metrics, output_dir):
     fig, axes = plt.subplots(3, 2, sharex=True, sharey=True, figsize=(12, 8))
     axes = axes.flatten()
-    n_total_objects = len(delta_metrics)
+    n_total_objects = len(object_metrics)
     n_used_by_band = {}
 
     for i, band in enumerate(BANDS):
-        values = values_from_column(delta_metrics, f"highlighted_fraction_{band}")
+        values = values_from_column(object_metrics, f"highlighted_fraction_{band}")
         n_used_by_band[band] = len(values)
         plot_fraction_histogram(ax=axes[i], values=values, title=f"{band}-band", n_total=n_total_objects)
         axes[i].set_ylabel("Number of objects")
@@ -246,15 +246,15 @@ def plot_highlighted_fraction_by_band(delta_metrics, output_dir):
     }
 
 
-def plot_global_highlighted_fraction(delta_metrics, output_dir):
-    values = values_from_column(delta_metrics, "highlighted_fraction")
+def plot_global_highlighted_fraction(object_metrics, output_dir):
+    values = values_from_column(object_metrics, "highlighted_fraction")
 
     fig, ax = plt.subplots(figsize=(8, 5))
     plot_fraction_histogram(
         ax=ax,
         values=values,
         title="Global Highlighted-Point Fraction",
-        n_total=len(delta_metrics),
+        n_total=len(object_metrics),
     )
     ax.set_xlabel("Highlighted / total LSST points")
     ax.set_ylabel("Number of objects")
@@ -289,13 +289,13 @@ def plot_count_histogram(ax, values, title):
     ax.grid(axis="y", alpha=0.25)
 
 
-def plot_lsst_points_by_band(delta_metrics, output_dir):
+def plot_lsst_points_by_band(object_metrics, output_dir):
     fig, axes = plt.subplots(3, 2, sharex=True, sharey=True, figsize=(12, 8))
     axes = axes.flatten()
     n_used_by_band = {}
 
     for i, band in enumerate(BANDS):
-        values = values_from_column(delta_metrics, f"n_total_points_{band}")
+        values = values_from_column(object_metrics, f"n_total_points_{band}")
         n_used_by_band[band] = len(values)
         plot_count_histogram(axes[i], values, f"{band}-band")
         axes[i].set_ylabel("Number of objects")
@@ -314,8 +314,8 @@ def plot_lsst_points_by_band(delta_metrics, output_dir):
     }
 
 
-def plot_global_lsst_points(delta_metrics, output_dir):
-    values = values_from_column(delta_metrics, "n_total_points")
+def plot_global_lsst_points(object_metrics, output_dir):
+    values = values_from_column(object_metrics, "n_total_points")
     positive_values = [value for value in values if value > 0]
     n_zero_or_negative = len(values) - len(positive_values)
 
@@ -367,16 +367,16 @@ def plot_global_lsst_points(delta_metrics, output_dir):
     }
 
 
-def main(delta_metrics_csv, output_dir, output_subdir="pop_plots"):
+def main(object_metrics_csv, output_dir, output_subdir="pop_plots"):
     output_dir = os.path.join(output_dir, output_subdir)
     os.makedirs(output_dir, exist_ok=True)
 
-    delta_metrics = load_delta_metrics(delta_metrics_csv)
-    result = plot_delta_distribution(delta_metrics, output_dir)
-    result.update(plot_highlighted_fraction_by_band(delta_metrics, output_dir))
-    result.update(plot_global_highlighted_fraction(delta_metrics, output_dir))
-    result.update(plot_lsst_points_by_band(delta_metrics, output_dir))
-    result.update(plot_global_lsst_points(delta_metrics, output_dir))
+    object_metrics = load_object_metrics(object_metrics_csv)
+    result = plot_delta_distribution(object_metrics, output_dir)
+    result.update(plot_highlighted_fraction_by_band(object_metrics, output_dir))
+    result.update(plot_global_highlighted_fraction(object_metrics, output_dir))
+    result.update(plot_lsst_points_by_band(object_metrics, output_dir))
+    result.update(plot_global_lsst_points(object_metrics, output_dir))
     result["pop_plots_dir"] = output_dir
 
     print(f"Saved delta distribution to {result['delta_distribution_plot']}")
@@ -395,13 +395,13 @@ def main(delta_metrics_csv, output_dir, output_subdir="pop_plots"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create population-level BOOM run plots.")
-    parser.add_argument("--delta_metrics_csv", required=True, help="Path to delta_metrics.csv from plot_lc.py")
+    parser.add_argument("--object_metrics_csv", required=True, help="Path to object_metrics.csv from plot_lc.py")
     parser.add_argument("--output_dir", required=True, help="Run directory where pop_plots is created")
     parser.add_argument("--output_subdir", default="pop_plots", help="Population plot subfolder name")
     args = parser.parse_args()
 
     main(
-        args.delta_metrics_csv,
+        args.object_metrics_csv,
         args.output_dir,
         output_subdir=args.output_subdir,
     )

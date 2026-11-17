@@ -15,8 +15,8 @@ def load_object_summary(objects_summary_csv):
         return list(csv.DictReader(f))
 
 
-def load_delta_metrics(delta_metrics_csv):
-    with open(delta_metrics_csv, "r", newline="") as f:
+def load_object_metrics(object_metrics_csv):
+    with open(object_metrics_csv, "r", newline="") as f:
         return list(csv.DictReader(f))
 
 
@@ -63,9 +63,9 @@ def build_at_least_counts(object_rows):
     return at_least_rows
 
 
-def first_relative_time_range_bin_objects(delta_metric_rows):
+def first_relative_time_range_bin_objects(object_metric_rows):
     matching_object_ids = []
-    for row in delta_metric_rows:
+    for row in object_metric_rows:
         baseline_days = float_or_none(row.get("baseline_days"))
         relative_time_range = float_or_none(row.get("delta"))
         if baseline_days is None or relative_time_range is None:
@@ -152,16 +152,16 @@ def main(
     n_candidates,
     n_objects,
     output_filename="query_summary.md",
-    delta_metrics_csv=None,
+    object_metrics_csv=None,
 ):
     os.makedirs(output_dir, exist_ok=True)
 
     object_rows = load_object_summary(objects_summary_csv)
     at_least_rows = build_at_least_counts(object_rows)
     first_bin_object_ids = None
-    if delta_metrics_csv is not None:
+    if object_metrics_csv is not None:
         first_bin_object_ids = first_relative_time_range_bin_objects(
-            load_delta_metrics(delta_metrics_csv)
+            load_object_metrics(object_metrics_csv)
         )
 
     markdown = build_summary_markdown(
@@ -191,7 +191,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_candidates", type=int, required=True, help="Total candidates retrieved")
     parser.add_argument("--n_objects", type=int, required=True, help="Total objects retrieved")
     parser.add_argument("--output_filename", default="query_summary.md", help="Summary markdown filename")
-    parser.add_argument("--delta_metrics_csv", default=None, help="Optional path to plots/delta_metrics.csv")
+    parser.add_argument("--object_metrics_csv", default=None, help="Optional path to object_metrics.csv")
     args = parser.parse_args()
 
     main(
@@ -200,5 +200,5 @@ if __name__ == "__main__":
         n_candidates=args.n_candidates,
         n_objects=args.n_objects,
         output_filename=args.output_filename,
-        delta_metrics_csv=args.delta_metrics_csv,
+        object_metrics_csv=args.object_metrics_csv,
     )

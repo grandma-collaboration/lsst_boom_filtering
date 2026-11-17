@@ -10,9 +10,9 @@ boom_filter_outputs/
     cands_sum.csv
     objs_sum.csv
     band_rates.json
+    object_metrics.csv
     plots/
       lc_<n>_object_<objectId>.png
-      delta_metrics.csv
     pop_plots/
       delta_distribution.png
       highlighted_fraction_by_band.png
@@ -37,9 +37,9 @@ When an excluded time range is set, every object with any point (LSST detection 
 
 `band_rates.json`: for each object and band, BOOM's rising and fading rates (mag/day) as of the object's most recent LSST detection in that band, whether or not that detection passed the filter. Taken from `properties.photstats` of the corresponding `LSST_alerts` document. The most recent detection is the latest one BOOM has at query time, which can be later than the end of the queried range.
 
-`plots/`: light-curve PNGs, one panel per band. Each plot shows LSST detections, highlighted points that passed the filter, LSST forced photometry, and ZTF crossmatch detections when enabled and available. The legend of each panel gives that band's rising/fading rate from `band_rates.json`, and the excluded time range, if any, is shaded red where it overlaps the plotted time range. The title gives the object's T0, its relative time range of interest, its number of filter-passing LSST points, and its RA and Dec.
+`object_metrics.csv`: per-object relative time range of interest measurements, highlighted-point fractions, and status labels used to build population-level plots.
 
-`plots/delta_metrics.csv`: per-object relative time range of interest measurements, highlighted-point fractions, and status labels used to build population-level plots.
+`plots/`: light-curve PNGs, one panel per band. Each plot shows LSST detections, highlighted points that passed the filter, LSST forced photometry, and ZTF crossmatch detections when enabled and available. The legend of each panel gives that band's rising/fading rate from `band_rates.json`, and the excluded time range, if any, is shaded red where it overlaps the plotted time range. The title gives the object's T0, its relative time range of interest, its number of filter-passing LSST points, and its RA and Dec.
 
 `pop_plots/`: population-level PNGs for the run.
 
