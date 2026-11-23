@@ -19,6 +19,14 @@ boom_filter_outputs/
       highlighted_fraction_global.png
       lsst_points_by_band.png
       lsst_points_global.png
+      first_passing_delay.png
+      first_passing_band.png
+      first_passing_mag_by_band.png
+      peak_mag_by_band.png
+      final_rising_rate_by_band.png
+      final_fading_rate_by_band.png
+      first_passing_rising_rate_by_band.png
+      first_passing_fading_rate_by_band.png
     query_summary.md
     pipeline_manifest.json
 ```
@@ -37,7 +45,7 @@ When an excluded time range is set, every object with any point (LSST detection 
 
 `band_rates.json`: for each object and band, BOOM's rising and fading rates (mag/day) as of the object's most recent LSST detection in that band, whether or not that detection passed the filter. Taken from `properties.photstats` of the corresponding `LSST_alerts` document. The most recent detection is the latest one BOOM has at query time, which can be later than the end of the queried range.
 
-`object_metrics.csv`: per-object relative time range of interest measurements, highlighted-point fractions, and status labels used to build population-level plots.
+`object_metrics.csv`: per-object relative time range of interest measurements, highlighted-point fractions, and status labels used to build population-level plots. It also gives, per object: the time from its first LSST detection (over its whole history, forced photometry not included) to its first filter-passing alert (`first_passing_delay_days`); the band and magnitude of that first filter-passing alert; its peak (brightest) detection magnitude in each band (`peak_mag_<band>`); BOOM's final rising and fading rates in each band, from `band_rates.json` (`final_rising_rate_<band>`, `final_fading_rate_<band>`); and the rising and fading rates in each band stored on its first filter-passing alert (`first_passing_rising_rate_<band>`, `first_passing_fading_rate_<band>`).
 
 `plots/`: light-curve PNGs, one panel per band. Each plot shows LSST detections, highlighted points that passed the filter, LSST forced photometry, and ZTF crossmatch detections when enabled and available. The legend of each panel gives that band's rising/fading rate from `band_rates.json`, and the excluded time range, if any, is shaded red where it overlaps the plotted time range. The title gives the object's T0, its relative time range of interest, its number of filter-passing LSST points, and its RA and Dec.
 
@@ -52,6 +60,20 @@ When an excluded time range is set, every object with any point (LSST detection 
 `pop_plots/lsst_points_by_band.png`: six-panel distribution of the number of LSST detection points in each band.
 
 `pop_plots/lsst_points_global.png`: distribution of the total number of LSST detection points across all bands.
+
+`pop_plots/first_passing_delay.png`: distribution of the time from each object's first LSST detection to its first filter-passing alert.
+
+`pop_plots/first_passing_band.png`: number of objects whose first filter-passing alert is in each band, in the order u, g, r, i, z, y.
+
+`pop_plots/first_passing_mag_by_band.png`: six-panel distribution of the magnitude of each object's first filter-passing alert, in the panel of that alert's band, so every object appears in exactly one panel.
+
+`pop_plots/peak_mag_by_band.png`: six-panel distribution of each object's peak (brightest) detection magnitude in each band.
+
+`pop_plots/final_rising_rate_by_band.png` and `pop_plots/final_fading_rate_by_band.png`: six-panel distributions of BOOM's final rising and fading rates in each band (from `band_rates.json`).
+
+`pop_plots/first_passing_rising_rate_by_band.png` and `pop_plots/first_passing_fading_rate_by_band.png`: six-panel distributions of the rising and fading rates in each band stored on each object's first filter-passing alert.
+
+The rate figures only include rising rates between -2 and 0 mag/day and fading rates between 0 and 2 mag/day; rates outside these ranges are left out. On every rate panel, the legend gives the number of objects whose rate is included, out of all objects.
 
 `query_summary.md`: markdown summary of the number of candidates and objects retrieved (after dropping objects with points in the excluded range), plus a table of objects with at least N filter-passing points, and the objects in the first bin of the relative time range of interest (baseline under 20 days and relative time range of interest under 0.05).
 

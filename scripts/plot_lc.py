@@ -93,7 +93,8 @@ def empty_object_metric(obj_id, status):
         metric[f"n_highlighted_points_{band}"] = 0
         metric[f"n_total_points_{band}"] = 0
         metric[f"highlighted_fraction_{band}"] = None
-    return metric
+        metric[f"peak_mag_{band}"] = None
+    return add_first_passing_and_rate_metrics(metric, None, None, None)
 
 
 def write_object_metrics(metrics, output_csv):
@@ -114,6 +115,19 @@ def write_object_metrics(metrics, output_csv):
             f"n_highlighted_points_{band}",
             f"n_total_points_{band}",
             f"highlighted_fraction_{band}",
+        ])
+    fieldnames.extend([
+        "first_passing_delay_days",
+        "first_passing_band",
+        "first_passing_mag",
+    ])
+    for band in BANDS:
+        fieldnames.extend([
+            f"peak_mag_{band}",
+            f"final_rising_rate_{band}",
+            f"final_fading_rate_{band}",
+            f"first_passing_rising_rate_{band}",
+            f"first_passing_fading_rate_{band}",
         ])
 
     with open(output_csv, "w", newline="") as f:
@@ -221,6 +235,62 @@ def get_alert_points_passed(alerts_data):
         alert_points_passed[obj_id].add((band, jd))
     return alert_points_passed
 
+
+def get_first_passing_alerts(alerts_data):
+    """
+    Build a mapping from objectId -> the object's earliest filter-passing alert,
+    as the full alert document from cands.json: its candidate gives the
+    magnitude and band, and its properties.photstats gives BOOM's rising and
+    fading rates in every band as of that alert.
+    """
+    first_passing_alerts = {}
+    for alert in alerts_data:
+        jd = alert["candidate"].get("jd")
+        if jd is None:
+            continue
+        current = first_passing_alerts.get(alert["objectId"])
+        if current is None or jd < current["candidate"]["jd"]:
+            first_passing_alerts[alert["objectId"]] = alert
+    return first_passing_alerts
+
+
+def photstats_rate(photstats, band, kind):
+    """BOOM's rising or fading (kind) rate in one band of an alert's photstats, or None."""
+    fit = ((photstats or {}).get(band) or {}).get(kind) or {}
+    return fit.get("rate")
+
+
+def add_first_passing_and_rate_metrics(metric, first_passing_alert, band_rates, first_alert_jd):
+    """
+    Add the metrics of the object's first filter-passing alert, and BOOM's
+    final rates in each band, to one object's metric row.
+
+    first_alert_jd is the jd of the object's first LSST detection (forced
+    photometry not included), over its whole history, even before the queried
+    range. band_rates is the object's entry of band_rates.json.
+    """
+    band_rates = band_rates or {}
+    candidate = (first_passing_alert or {}).get("candidate") or {}
+    photstats = ((first_passing_alert or {}).get("properties") or {}).get("photstats")
+
+    first_passing_jd = candidate.get("jd")
+    if first_passing_jd is not None:
+        # The first passing alert is itself an alert, so no later than the first one
+        first_alert_jd = first_passing_jd if first_alert_jd is None else min(first_alert_jd, first_passing_jd)
+        metric["first_passing_delay_days"] = first_passing_jd - first_alert_jd
+    else:
+        metric["first_passing_delay_days"] = None
+    metric["first_passing_band"] = candidate.get("band")
+    metric["first_passing_mag"] = candidate.get("magpsf")
+
+    for band in BANDS:
+        rates = band_rates.get(band) or {}
+        metric[f"final_rising_rate_{band}"] = rates.get("rising_rate")
+        metric[f"final_fading_rate_{band}"] = rates.get("fading_rate")
+        metric[f"first_passing_rising_rate_{band}"] = photstats_rate(photstats, band, "rising")
+        metric[f"first_passing_fading_rate_{band}"] = photstats_rate(photstats, band, "fading")
+    return metric
+
 def is_highlight(band, jd, passed_points, tol=1e-6):
     for b, j in passed_points:
         if b == band and abs(jd - j) < tol:
@@ -249,7 +319,7 @@ def is_valid_ulim(p):
     return (bool_jd and bool_lim and bool_band)
 
 
-def compute_object_metrics(obj, alert_points_passed):
+def compute_object_metrics(obj, alert_points_passed, first_passing_alert=None, band_rates=None):
     obj_id = obj.get("_id", obj.get("objectId"))
     lc_points = obj.get("prv_candidates", [])
 
@@ -260,7 +330,8 @@ def compute_object_metrics(obj, alert_points_passed):
 
     all_lsst_jds = [p["jd"] for points in points_by_band.values() for p in points]
     if not all_lsst_jds:
-        return empty_object_metric(obj_id, "no_valid_lsst_photometry")
+        metric = empty_object_metric(obj_id, "no_valid_lsst_photometry")
+        return add_first_passing_and_rate_metrics(metric, first_passing_alert, band_rates, None)
 
     jd_min = min(all_lsst_jds)
     baseline = max(all_lsst_jds) - jd_min
@@ -316,6 +387,7 @@ def compute_object_metrics(obj, alert_points_passed):
         "highlighted_window_days": highlighted_window_days,
         "highlighted_start_day": highlighted_window[0] if highlighted_window is not None else None,
         "highlighted_stop_day": highlighted_window[1] if highlighted_window is not None else None,
+        
     }
     for band in BANDS:
         n_total_band = n_total_points_by_band[band]
@@ -325,15 +397,18 @@ def compute_object_metrics(obj, alert_points_passed):
         metric[f"highlighted_fraction_{band}"] = (
             n_highlighted_band / n_total_band if n_total_band > 0 else None
         )
+        # Brightest detection of the band (lowest magnitude)
+        band_points = points_by_band.get(band, [])
+        metric[f"peak_mag_{band}"] = min(p["magpsf"] for p in band_points) if band_points else None
 
-    return metric
+    return add_first_passing_and_rate_metrics(metric, first_passing_alert, band_rates, jd_min)
 
 # =========================
 # LIGHT CURVE PLOTTING
 # =========================
-def plot_object_lc(client, obj, alert_points_passed, output_dir, iter, exclude_jd=None, band_rates=None):
+def plot_object_lc(client, obj, alert_points_passed, output_dir, iter, exclude_jd=None, band_rates=None, first_passing_alert=None):
     obj_id = obj.get("_id", obj.get("objectId"))
-    metric = compute_object_metrics(obj, alert_points_passed)
+    metric = compute_object_metrics(obj, alert_points_passed, first_passing_alert, band_rates)
     band_rates = band_rates or {}
 
     print(f"\n\n\n      ========================== Object {obj_id} ({iter+1}) ==========================\n")
@@ -639,6 +714,9 @@ def main(
     # only exists on LSST_alerts documents and has to be queried separately.
     rates_by_object = load_json(band_rates_json) if band_rates_json else {}
 
+    # Each object's earliest filter-passing alert, for the first-passing metrics
+    first_passing_alerts = get_first_passing_alerts(alerts_data)
+
     # Plotting loop
     if max_objects is not None:
         objects_data = objects_data[:max_objects]
@@ -650,9 +728,14 @@ def main(
             metric = plot_object_lc(
                 client, obj, alert_points_passed, plots_dir, i,
                 exclude_jd=exclude_jd, band_rates=rates_by_object.get(obj_id, {}),
+                first_passing_alert=first_passing_alerts.get(obj_id),
             )
         else:
-            metric = compute_object_metrics(obj, alert_points_passed)
+            metric = compute_object_metrics(
+                obj, alert_points_passed,
+                first_passing_alert=first_passing_alerts.get(obj_id),
+                band_rates=rates_by_object.get(obj_id, {}),
+            )
         object_metrics.append(metric)
         highlight_count += metric["n_highlighted_points"]
 

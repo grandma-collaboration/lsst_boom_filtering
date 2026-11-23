@@ -204,6 +204,14 @@ boom_filter_outputs/
       lsst_points_by_band.pickle
       lsst_points_global.png
       lsst_points_global.pickle
+      first_passing_delay.png / .pickle
+      first_passing_band.png / .pickle
+      first_passing_mag_by_band.png / .pickle
+      peak_mag_by_band.png / .pickle
+      final_rising_rate_by_band.png / .pickle
+      final_fading_rate_by_band.png / .pickle
+      first_passing_rising_rate_by_band.png / .pickle
+      first_passing_fading_rate_by_band.png / .pickle
     query_summary.md
     pipeline_manifest.json
 ```
@@ -220,7 +228,9 @@ Important files:
   of the object's most recent LSST detection in that band. They are shown in the
   legend of individual light-curve plots.
 - `object_metrics.csv`: per-object metric table used to build the
-  population plots.
+  population plots: relative time range of interest, filter-passing fractions,
+  time to the first filter-passing alert and that alert's band, magnitude and
+  rates, peak magnitude per band, and BOOM's final rates per band.
 - `pop_plots/`: run-level diagnostic plots.
 - `query_summary.md`: markdown summary of retrieved candidates/objects and the
   number of objects with at least N filter-passing points.

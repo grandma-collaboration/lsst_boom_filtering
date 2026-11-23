@@ -187,16 +187,7 @@ def annotate_used_objects(ax, n_used, n_total):
     else:
         text = "Used objects: 0/0"
 
-    ax.text(
-        0.98,
-        0.95,
-        text,
-        transform=ax.transAxes,
-        ha="right",
-        va="top",
-        fontsize=9,
-        bbox={"boxstyle": "round", "facecolor": "white", "edgecolor": "0.8", "alpha": 0.9},
-    )
+    annotate_box(ax, text)
 
 
 def plot_fraction_histogram(ax, values, title, n_total):
@@ -270,9 +261,9 @@ def plot_global_highlighted_fraction(object_metrics, output_dir):
     }
 
 
-def plot_count_histogram(ax, values, title):
+def plot_count_histogram(ax, values, title, bins):
     if values:
-        ax.hist(values, bins=integer_bins(values), color="slateblue", edgecolor="white")
+        ax.hist(values, bins=bins, color="slateblue", edgecolor="white")
     else:
         ax.text(
             0.5,
@@ -285,22 +276,31 @@ def plot_count_histogram(ax, values, title):
         )
 
     ax.set_title(title)
-    ax.set_xlim(left=-0.5)
     ax.grid(axis="y", alpha=0.25)
 
 
 def plot_lsst_points_by_band(object_metrics, output_dir):
-    fig, axes = plt.subplots(3, 2, sharex=True, sharey=True, figsize=(12, 8))
+    values_by_band = {band: values_from_column(object_metrics, f"n_total_points_{band}") for band in BANDS}
+    # The same integer bins in every panel, up to the largest count of any band
+    bins = integer_bins([value for values in values_by_band.values() for value in values])
+
+    # Each band keeps its own y scale: the u and y panels' tall 0-point bars
+    # would otherwise flatten the other bands
+    fig, axes = plt.subplots(3, 2, sharex=True, figsize=(12, 8))
     axes = axes.flatten()
     n_used_by_band = {}
 
     for i, band in enumerate(BANDS):
-        values = values_from_column(object_metrics, f"n_total_points_{band}")
+        values = values_by_band[band]
         n_used_by_band[band] = len(values)
-        plot_count_histogram(axes[i], values, f"{band}-band")
+        plot_count_histogram(axes[i], values, f"{band}-band", bins)
         axes[i].set_ylabel("Number of objects")
         if i >= 4:
             axes[i].set_xlabel("Number of LSST points")
+
+    # Set once, after every panel is drawn: the x axis is shared, so a limit set
+    # while drawing would freeze it at the first panel's range and crop the others
+    axes[0].set_xlim(bins[0], bins[-1])
 
     fig.suptitle("Number of LSST Points by Band")
     output_path = os.path.join(output_dir, "lsst_points_by_band.png")
@@ -367,6 +367,207 @@ def plot_global_lsst_points(object_metrics, output_dir):
     }
 
 
+# =========================
+# FIRST-PASSING ALERT, PEAK MAGNITUDE AND RATE DISTRIBUTIONS
+# =========================
+
+BAND_COLORS = {"u": "purple", "g": "green", "r": "red", "i": "orange", "z": "brown", "y": "gray"}
+
+# Rates (mag/day) included in the rate histograms; the others are left out
+RISING_RATE_RANGE = (-2.0, 0.0)
+FADING_RATE_RANGE = (0.0, 2.0)
+
+
+def annotate_box(ax, text):
+    ax.text(
+        0.98,
+        0.95,
+        text,
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=9,
+        bbox={"boxstyle": "round", "facecolor": "white", "edgecolor": "0.8", "alpha": 0.9},
+    )
+
+
+def show_no_data(ax, text):
+    ax.text(0.5, 0.5, text, transform=ax.transAxes, ha="center", va="center", fontsize=10)
+
+
+def leave_room_for_box(ax):
+    """Raise the top of the y axis so the annotation box doesn't hide the tallest bars."""
+    ax.set_ylim(top=ax.get_ylim()[1] * 1.3)
+
+
+def common_bins(values_by_band, n_bins=20):
+    """The same bins for every panel of a figure, over all its values."""
+    values = [value for values in values_by_band.values() for value in values]
+    if not values:
+        return n_bins
+    low, high = min(values), max(values)
+    if low == high:
+        low, high = low - 0.5, high + 0.5
+    return np.linspace(low, high, n_bins + 1)
+
+
+def save_band_figure(fig, axes, title, xlabel, output_path):
+    for i, ax in enumerate(axes):
+        ax.set_title(f"{BANDS[i]}-band")
+        ax.set_ylabel("Number of objects")
+        ax.grid(axis="y", alpha=0.25)
+        if i >= 4:
+            ax.set_xlabel(xlabel)
+    fig.suptitle(title)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    save_figure(fig, output_path)
+    plt.close(fig)
+
+
+def plot_first_passing_delay(object_metrics, output_dir):
+    values = values_from_column(object_metrics, "first_passing_delay_days")
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    if values:
+        ax.hist(values, bins=120, color="steelblue", edgecolor="white")
+        leave_room_for_box(ax)
+    else:
+        show_no_data(ax, "No objects")
+    annotate_used_objects(ax, len(values), len(object_metrics))
+    ax.set_title("Time From First Alert To First Filter-Passing Alert")
+    ax.set_xlabel("t(first passing alert) - t(first alert) [days]")
+    ax.set_ylabel("Number of objects")
+    ax.grid(axis="y", alpha=0.25)
+
+    output_path = os.path.join(output_dir, "first_passing_delay.png")
+    plt.tight_layout()
+    save_figure(fig, output_path)
+    plt.close(fig)
+
+    return {
+        "first_passing_delay_plot": output_path,
+        "n_used_first_passing_delay": len(values),
+    }
+
+
+def plot_rate_by_band(object_metrics, output_dir, column_prefix, title, filename, value_range):
+    """
+    One panel per band: the distribution of the rates in column
+    <column_prefix>_<band>. Only the rates within value_range (low, high),
+    bounds included, are used: shown in the histogram and counted in the legend.
+    """
+    low, high = value_range
+    fig, axes = plt.subplots(3, 2, sharex=True, figsize=(12, 8))
+    axes = axes.flatten()
+    n_total = len(object_metrics)
+    n_used_by_band = {}
+
+    for ax, band in zip(axes, BANDS):
+        values = [
+            value for value in values_from_column(object_metrics, f"{column_prefix}_{band}")
+            if low <= value <= high
+        ]
+        n_used_by_band[band] = len(values)
+        if values:
+            ax.hist(values, bins=np.linspace(low, high, 21), color=BAND_COLORS[band], edgecolor="white")
+            leave_room_for_box(ax)
+        else:
+            show_no_data(ax, f"No rates between {low:g} and {high:g} mag/day")
+        ax.set_xlim(low, high)
+        annotate_used_objects(ax, len(values), n_total)
+
+    output_path = os.path.join(output_dir, filename)
+    save_band_figure(fig, axes, title, "Rate [mag/day]", output_path)
+
+    return {
+        f"{column_prefix}_by_band_plot": output_path,
+        f"n_used_{column_prefix}_by_band": n_used_by_band,
+    }
+
+
+def plot_peak_mag_by_band(object_metrics, output_dir):
+    values_by_band = {band: values_from_column(object_metrics, f"peak_mag_{band}") for band in BANDS}
+    bins = common_bins(values_by_band)
+
+    fig, axes = plt.subplots(3, 2, sharex=True, figsize=(12, 8))
+    axes = axes.flatten()
+    for ax, band in zip(axes, BANDS):
+        values = values_by_band[band]
+        if values:
+            ax.hist(values, bins=bins, color=BAND_COLORS[band], edgecolor="white")
+            leave_room_for_box(ax)
+        else:
+            show_no_data(ax, "No detections")
+        annotate_used_objects(ax, len(values), len(object_metrics))
+
+    output_path = os.path.join(output_dir, "peak_mag_by_band.png")
+    save_band_figure(fig, axes, "Peak (Brightest) Magnitude by Band", "Peak magpsf", output_path)
+
+    return {
+        "peak_mag_by_band_plot": output_path,
+        "n_used_peak_mag_by_band": {band: len(values) for band, values in values_by_band.items()},
+    }
+
+
+def plot_first_passing_mag_by_band(object_metrics, output_dir):
+    """
+    Magnitude of each object's first filter-passing alert, in the panel of that
+    alert's band: every object appears in exactly one panel.
+    """
+    values_by_band = {band: [] for band in BANDS}
+    for row in object_metrics:
+        band = row.get("first_passing_band")
+        mag = float_or_none(row.get("first_passing_mag"))
+        if band in values_by_band and mag is not None:
+            values_by_band[band].append(mag)
+    bins = common_bins(values_by_band)
+
+    fig, axes = plt.subplots(3, 2, sharex=True, figsize=(12, 8))
+    axes = axes.flatten()
+    for ax, band in zip(axes, BANDS):
+        values = values_by_band[band]
+        if values:
+            ax.hist(values, bins=bins, color=BAND_COLORS[band], edgecolor="white")
+            leave_room_for_box(ax)
+        else:
+            show_no_data(ax, "No first passing alert in this band")
+        annotate_box(ax, f"Objects: {len(values)}/{len(object_metrics)}")
+
+    output_path = os.path.join(output_dir, "first_passing_mag_by_band.png")
+    save_band_figure(
+        fig, axes, "Magnitude of the First Filter-Passing Alert, by Its Band", "magpsf", output_path
+    )
+
+    return {
+        "first_passing_mag_by_band_plot": output_path,
+        "n_first_passing_mag_by_band": {band: len(values) for band, values in values_by_band.items()},
+    }
+
+
+def plot_first_passing_band(object_metrics, output_dir):
+    counts = [sum(1 for row in object_metrics if row.get("first_passing_band") == band) for band in BANDS]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bars = ax.bar(BANDS, counts, color=[BAND_COLORS[band] for band in BANDS], edgecolor="white")
+    ax.bar_label(bars)
+    leave_room_for_box(ax)
+    annotate_box(ax, f"Objects: {sum(counts)}/{len(object_metrics)}")
+    ax.set_title("Band of the First Filter-Passing Alert")
+    ax.set_xlabel("Band")
+    ax.set_ylabel("Number of objects")
+    ax.grid(axis="y", alpha=0.25)
+
+    output_path = os.path.join(output_dir, "first_passing_band.png")
+    plt.tight_layout()
+    save_figure(fig, output_path)
+    plt.close(fig)
+
+    return {
+        "first_passing_band_plot": output_path,
+        "n_first_passing_band": dict(zip(BANDS, counts)),
+    }
+
+
 def main(object_metrics_csv, output_dir, output_subdir="pop_plots"):
     output_dir = os.path.join(output_dir, output_subdir)
     os.makedirs(output_dir, exist_ok=True)
@@ -377,6 +578,18 @@ def main(object_metrics_csv, output_dir, output_subdir="pop_plots"):
     result.update(plot_global_highlighted_fraction(object_metrics, output_dir))
     result.update(plot_lsst_points_by_band(object_metrics, output_dir))
     result.update(plot_global_lsst_points(object_metrics, output_dir))
+    result.update(plot_first_passing_delay(object_metrics, output_dir))
+    result.update(plot_first_passing_band(object_metrics, output_dir))
+    result.update(plot_first_passing_mag_by_band(object_metrics, output_dir))
+    result.update(plot_peak_mag_by_band(object_metrics, output_dir))
+    rate_plots = [
+        ("final_rising_rate", "Final Rising Rate by Band (latest alert of each band)", "final_rising_rate_by_band.png", RISING_RATE_RANGE),
+        ("final_fading_rate", "Final Fading Rate by Band (latest alert of each band)", "final_fading_rate_by_band.png", FADING_RATE_RANGE),
+        ("first_passing_rising_rate", "Rising Rate at the First Filter-Passing Alert, by Band", "first_passing_rising_rate_by_band.png", RISING_RATE_RANGE),
+        ("first_passing_fading_rate", "Fading Rate at the First Filter-Passing Alert, by Band", "first_passing_fading_rate_by_band.png", FADING_RATE_RANGE),
+    ]
+    for column_prefix, title, filename, value_range in rate_plots:
+        result.update(plot_rate_by_band(object_metrics, output_dir, column_prefix, title, filename, value_range))
     result["pop_plots_dir"] = output_dir
 
     print(f"Saved delta distribution to {result['delta_distribution_plot']}")
@@ -384,6 +597,12 @@ def main(object_metrics_csv, output_dir, output_subdir="pop_plots"):
     print(f"Saved global highlighted-point fraction to {result['highlighted_fraction_global_plot']}")
     print(f"Saved LSST point counts by band to {result['lsst_points_by_band_plot']}")
     print(f"Saved global LSST point counts to {result['lsst_points_global_plot']}")
+    print(f"Saved first-passing delay distribution to {result['first_passing_delay_plot']}")
+    print(f"Saved first-passing band distribution to {result['first_passing_band_plot']}")
+    print(f"Saved first-passing magnitude by band to {result['first_passing_mag_by_band_plot']}")
+    print(f"Saved peak magnitude by band to {result['peak_mag_by_band_plot']}")
+    for column_prefix, _, _, _ in rate_plots:
+        print(f"Saved {column_prefix.replace('_', ' ')} by band to {result[f'{column_prefix}_by_band_plot']}")
     print(
         "Used objects for relative time range of interest: "
         f"{result['n_used_deltas']}/"
